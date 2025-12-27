@@ -93,21 +93,10 @@ class MainActivity : AppCompatActivity() {
     // Once you find the correct URL, replace the URLs below with it.
     // ====================================================================
     
-    // Stream URLs found from browser Developer Tools (Network tab)
-    // These URLs return 200 (success) status
-    // Note: ExoPlayer will automatically handle chunklist.m3u8 and .ts segments
-    // You only need to provide the master playlist URL
+    // Akashvani Patna live stream URL
+    // Correct stream identifier: pbaudio087
     private val streamUrls = listOf(
-        // Primary: Master HLS playlist (recommended - ExoPlayer handles everything)
-        "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8",
-        // Backup: Direct chunklist (if master playlist has issues)
-        "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/chunklist.m3u8",
-        // HTTP versions (in case HTTPS has certificate issues)
-        "http://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8",
-        "http://air.pc.cdn.bitgravity.com/air/live/pbaudio001/chunklist.m3u8"
-        // Note: Don't add .ts files - ExoPlayer downloads them automatically
-        // If "pbaudio001" is not Akashvani Patna, try other identifiers like:
-        // pbaudio002, pbfm001, patna001, etc.
+        "https://air.pc.cdn.bitgravity.com/air/live/pbaudio087/playlist.m3u8"
     )
     
     // Current URL index being tried
