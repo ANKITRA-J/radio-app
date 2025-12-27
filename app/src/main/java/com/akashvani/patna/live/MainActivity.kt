@@ -71,9 +71,26 @@ class MainActivity : AppCompatActivity() {
     private lateinit var stopButton: Button
 
     // HLS stream URL for Akashvani Patna
-    // TODO: Replace with actual Akashvani Patna HLS stream URL
-    // Common format: https://example.com/stream.m3u8
+    // IMPORTANT: This URL may not be correct. You need to find the actual working stream URL.
+    // 
+    // To find the correct URL:
+    // 1. Visit the official Akashvani/All India Radio website
+    // 2. Check their mobile app or web player
+    // 3. Use browser developer tools to find the actual stream URL
+    // 4. Test the URL in VLC media player first
+    //
+    // Common All India Radio stream formats:
+    // - HLS: .m3u8 files
+    // - MP3: Direct .mp3 streams
+    // - AAC: Direct .aac streams
+    //
+    // Current URL (may need to be updated):
     private val hlsStreamUrl = "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8"
+    
+    // Alternative URLs to try (replace the above if needed):
+    // private val hlsStreamUrl = "http://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8"
+    // private val hlsStreamUrl = "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8"
+    // For MP3 streams (not HLS), you would need to use a different MediaSource
 
     // Retry configuration
     private val maxRetryAttempts = 5
@@ -152,20 +169,32 @@ class MainActivity : AppCompatActivity() {
         player?.addListener(object : Player.Listener {
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 super.onPlayerError(error)
+                android.util.Log.e("RadioApp", "Player error: ${error.errorCode} - ${error.message}")
                 handlePlaybackError(error)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 super.onPlaybackStateChanged(playbackState)
+                android.util.Log.d("RadioApp", "Playback state: $playbackState")
                 when (playbackState) {
+                    Player.STATE_IDLE -> {
+                        android.util.Log.d("RadioApp", "State: IDLE")
+                    }
+                    Player.STATE_BUFFERING -> {
+                        android.util.Log.d("RadioApp", "State: BUFFERING")
+                        Toast.makeText(this@MainActivity, "Buffering...", Toast.LENGTH_SHORT).show()
+                    }
                     Player.STATE_READY -> {
+                        android.util.Log.d("RadioApp", "State: READY")
                         // Stream is ready
                         retryAttempts = 0
                         if (isPlaying) {
                             player?.play()
+                            Toast.makeText(this@MainActivity, "Stream ready!", Toast.LENGTH_SHORT).show()
                         }
                     }
                     Player.STATE_ENDED -> {
+                        android.util.Log.d("RadioApp", "State: ENDED")
                         // Stream ended, attempt to reconnect
                         if (isPlaying) {
                             attemptReconnect()
@@ -173,16 +202,23 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                super.onIsPlayingChanged(isPlaying)
+                android.util.Log.d("RadioApp", "Is playing: $isPlaying")
+            }
         })
 
         // Create HLS MediaSource using DefaultHttpDataSource
         val httpDataSourceFactory: DataSource.Factory = DefaultHttpDataSource.Factory()
-            .setUserAgent("AkashvaniPatnaLive/1.0")
-            .setConnectTimeoutMs(10000)
-            .setReadTimeoutMs(10000)
+            .setUserAgent("Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36")
+            .setConnectTimeoutMs(15000) // Increased timeout
+            .setReadTimeoutMs(15000) // Increased timeout
+            .setAllowCrossProtocolRedirects(true)
 
         val hlsMediaSourceFactory = HlsMediaSource.Factory(httpDataSourceFactory)
             .setAllowChunklessPreparation(true) // Optimize for low-end devices
+            .setPlaylistTrackerFactory(null) // Use default
 
         // Create MediaItem from HLS URL
         val mediaItem = MediaItem.Builder()
@@ -217,6 +253,7 @@ class MainActivity : AppCompatActivity() {
 
         // If player is not initialized or in error state, reinitialize
         if (player == null || player?.playbackState == Player.STATE_IDLE) {
+            android.util.Log.d("RadioApp", "Initializing player with URL: $hlsStreamUrl")
             initializePlayer()
             // Prepare player before starting playback
             player?.prepare()
@@ -230,7 +267,8 @@ class MainActivity : AppCompatActivity() {
         playButton.isEnabled = false
         stopButton.isEnabled = true
 
-        Toast.makeText(this, "Starting stream...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Connecting to stream...", Toast.LENGTH_SHORT).show()
+        android.util.Log.d("RadioApp", "Playback started, waiting for stream...")
     }
 
     /**
@@ -271,25 +309,26 @@ class MainActivity : AppCompatActivity() {
             return // Don't retry if user stopped playback
         }
 
-        when (error.errorCode) {
-            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
-            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
-            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
-            androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
-            androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED -> {
-                // Network or parsing errors - attempt to reconnect
-                attemptReconnect()
-            }
-            else -> {
-                // Other errors - show message and attempt reconnect
-                Toast.makeText(
-                    this,
-                    "Playback error: ${error.message}",
-                    Toast.LENGTH_LONG
-                ).show()
-                attemptReconnect()
-            }
+        val errorMessage = when (error.errorCode) {
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "Network connection failed"
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Connection timeout"
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "HTTP error: ${error.message}"
+            androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED -> "Invalid stream format"
+            androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED -> "Invalid HLS manifest"
+            else -> "Error ${error.errorCode}: ${error.message ?: "Unknown error"}"
         }
+
+        android.util.Log.e("RadioApp", "Error details: $errorMessage")
+        
+        // Show detailed error message
+        Toast.makeText(
+            this,
+            "Error: $errorMessage\nCheck Logcat for details",
+            Toast.LENGTH_LONG
+        ).show()
+
+        // Attempt to reconnect for all errors
+        attemptReconnect()
     }
 
     /**
