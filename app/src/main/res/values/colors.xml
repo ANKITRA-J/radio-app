@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- High contrast colors for accessibility -->
+    <color name="background">#000000</color>
+    <color name="play_button_bg">#4CAF50</color>
+    <color name="stop_button_bg">#F44336</color>
+    <color name="button_text">#FFFFFF</color>
+</resources>
+
