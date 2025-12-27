@@ -70,21 +70,44 @@ class MainActivity : AppCompatActivity() {
     private lateinit var playButton: Button
     private lateinit var stopButton: Button
 
-    // Multiple stream URLs - app will try each one automatically if one fails
-    // Add more URLs here if you find them. The app will cycle through all URLs until one works.
-    // Common All India Radio stream patterns:
+    // ====================================================================
+    // IMPORTANT: FIND THE CORRECT AKASHVANI PATNA STREAM URL
+    // ====================================================================
+    // The URLs below may not be correct. You need to find the actual
+    // Akashvani Patna (AM 621) stream URL and add it here.
+    //
+    // HOW TO FIND THE CORRECT STREAM URL:
+    // 1. Visit: https://allindiaradio.gov.in or https://prasarbharati.gov.in
+    // 2. Navigate to Patna station / Akashvani Patna
+    // 3. Open browser Developer Tools (F12 or Right-click -> Inspect)
+    // 4. Go to "Network" tab
+    // 5. Play the Akashvani Patna stream on the website
+    // 6. Look for requests with .m3u8, .mp3, or .aac extensions
+    // 7. Copy the full URL and add it to the list below
+    //
+    // ALTERNATIVE: Try these websites that may have the stream:
+    // - https://onlineradiofm.in/stations/all-india-radio-air-patna
+    // - https://www.radioindia.in/akashvani-patna
+    // - https://indiaradio.in/air-patna
+    //
+    // Once you find the correct URL, replace the URLs below with it.
+    // ====================================================================
+    
+    // Stream URLs found from browser Developer Tools (Network tab)
+    // These URLs return 200 (success) status
+    // Note: ExoPlayer will automatically handle chunklist.m3u8 and .ts segments
+    // You only need to provide the master playlist URL
     private val streamUrls = listOf(
+        // Primary: Master HLS playlist (recommended - ExoPlayer handles everything)
         "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8",
+        // Backup: Direct chunklist (if master playlist has issues)
+        "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/chunklist.m3u8",
+        // HTTP versions (in case HTTPS has certificate issues)
         "http://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8",
-        "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/Chunklist.m3u8",
-        "http://air.pc.cdn.bitgravity.com/air/live/pbaudio001/Chunklist.m3u8",
-        "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/index.m3u8",
-        "http://air.pc.cdn.bitgravity.com/air/live/pbaudio001/index.m3u8"
-        // To add more URLs, just add them to this list
-        // You can find working URLs by:
-        // 1. Visiting allindiaradio.gov.in
-        // 2. Using browser developer tools (F12) -> Network tab
-        // 3. Playing the stream and looking for .m3u8 requests
+        "http://air.pc.cdn.bitgravity.com/air/live/pbaudio001/chunklist.m3u8"
+        // Note: Don't add .ts files - ExoPlayer downloads them automatically
+        // If "pbaudio001" is not Akashvani Patna, try other identifiers like:
+        // pbaudio002, pbfm001, patna001, etc.
     )
     
     // Current URL index being tried
