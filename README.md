@@ -4,13 +4,13 @@ A simple, stable Android app for streaming Akashvani Patna live HLS audio using 
 
 ## Features
 
-- ✅ Single-screen interface with two large buttons (PLAY/STOP)
-- ✅ High contrast UI for accessibility
-- ✅ Auto-reconnect on stream failures
-- ✅ Keeps screen awake during playback
-- ✅ Optimized for low-end Android devices
-- ✅ Proper lifecycle management
-- ✅ No ads, no menus, minimal design
+-  Single-screen interface with two large buttons (PLAY/STOP)
+-  High contrast UI for accessibility
+-  Auto-reconnect on stream failures
+-  Keeps screen awake during playback
+-  Optimized for low-end Android devices
+-  Proper lifecycle management
+-  No ads, no menus, minimal design
 
 ## Requirements
 
