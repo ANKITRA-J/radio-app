@@ -40,11 +40,13 @@ import android.widget.Button
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
-import androidx.media3.exoplayer.upstream.DefaultHttpDataSource
 
 /**
  * MainActivity for Akashvani Patna Live streaming app.
@@ -138,8 +140,8 @@ class MainActivity : AppCompatActivity() {
 
         // Create ExoPlayer instance with audio attributes for background playback
         val audioAttributes = AudioAttributes.Builder()
-            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(C.CONTENT_TYPE_MUSIC)
+            .setUsage(C.USAGE_MEDIA)
             .build()
 
         player = ExoPlayer.Builder(this)
@@ -174,7 +176,7 @@ class MainActivity : AppCompatActivity() {
         })
 
         // Create HLS MediaSource using DefaultHttpDataSource
-        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+        val httpDataSourceFactory: DataSource.Factory = DefaultHttpDataSource.Factory()
             .setUserAgent("AkashvaniPatnaLive/1.0")
             .setConnectTimeoutMs(10000)
             .setReadTimeoutMs(10000)
