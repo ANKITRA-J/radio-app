@@ -70,27 +70,18 @@ class MainActivity : AppCompatActivity() {
     private lateinit var playButton: Button
     private lateinit var stopButton: Button
 
-    // HLS stream URL for Akashvani Patna
-    // IMPORTANT: This URL may not be correct. You need to find the actual working stream URL.
-    // 
-    // To find the correct URL:
-    // 1. Visit the official Akashvani/All India Radio website
-    // 2. Check their mobile app or web player
-    // 3. Use browser developer tools to find the actual stream URL
-    // 4. Test the URL in VLC media player first
-    //
-    // Common All India Radio stream formats:
-    // - HLS: .m3u8 files
-    // - MP3: Direct .mp3 streams
-    // - AAC: Direct .aac streams
-    //
-    // Current URL (may need to be updated):
-    private val hlsStreamUrl = "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8"
+    // Multiple stream URLs - app will try each one automatically if one fails
+    // Add more URLs here if you find them. The app will cycle through all URLs until one works.
+    private val streamUrls = listOf(
+        "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8",
+        "http://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8",
+        "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/Chunklist.m3u8",
+        "http://air.pc.cdn.bitgravity.com/air/live/pbaudio001/Chunklist.m3u8"
+        // Add more URLs here as you find them
+    )
     
-    // Alternative URLs to try (replace the above if needed):
-    // private val hlsStreamUrl = "http://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8"
-    // private val hlsStreamUrl = "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8"
-    // For MP3 streams (not HLS), you would need to use a different MediaSource
+    // Current URL index being tried
+    private var currentUrlIndex = 0
 
     // Retry configuration
     private val maxRetryAttempts = 5
@@ -218,11 +209,13 @@ class MainActivity : AppCompatActivity() {
 
         val hlsMediaSourceFactory = HlsMediaSource.Factory(httpDataSourceFactory)
             .setAllowChunklessPreparation(true) // Optimize for low-end devices
-            .setPlaylistTrackerFactory(null) // Use default
 
-        // Create MediaItem from HLS URL
+        // Create MediaItem from current HLS URL
+        val currentUrl = streamUrls[currentUrlIndex]
+        android.util.Log.d("RadioApp", "Trying stream URL ${currentUrlIndex + 1}/${streamUrls.size}: $currentUrl")
+        
         val mediaItem = MediaItem.Builder()
-            .setUri(hlsStreamUrl)
+            .setUri(currentUrl)
             .build()
 
         // Create and set MediaSource
@@ -250,10 +243,11 @@ class MainActivity : AppCompatActivity() {
 
         isPlaying = true
         retryAttempts = 0
+        currentUrlIndex = 0 // Reset to first URL when starting playback
 
         // If player is not initialized or in error state, reinitialize
         if (player == null || player?.playbackState == Player.STATE_IDLE) {
-            android.util.Log.d("RadioApp", "Initializing player with URL: $hlsStreamUrl")
+            android.util.Log.d("RadioApp", "Initializing player with ${streamUrls.size} URLs available")
             initializePlayer()
             // Prepare player before starting playback
             player?.prepare()
@@ -303,6 +297,7 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Handle playback errors and attempt reconnection
+     * Will automatically try next URL if current one fails
      */
     private fun handlePlaybackError(error: androidx.media3.common.PlaybackException) {
         if (!isPlaying) {
@@ -318,17 +313,62 @@ class MainActivity : AppCompatActivity() {
             else -> "Error ${error.errorCode}: ${error.message ?: "Unknown error"}"
         }
 
-        android.util.Log.e("RadioApp", "Error details: $errorMessage")
+        android.util.Log.e("RadioApp", "Error with URL ${currentUrlIndex + 1}: $errorMessage")
         
-        // Show detailed error message
-        Toast.makeText(
-            this,
-            "Error: $errorMessage\nCheck Logcat for details",
-            Toast.LENGTH_LONG
-        ).show()
-
-        // Attempt to reconnect for all errors
-        attemptReconnect()
+        // Try next URL if available
+        if (currentUrlIndex < streamUrls.size - 1) {
+            currentUrlIndex++
+            android.util.Log.d("RadioApp", "Switching to URL ${currentUrlIndex + 1}/${streamUrls.size}")
+            Toast.makeText(
+                this,
+                "Stream failed, trying alternative URL ${currentUrlIndex + 1}/${streamUrls.size}...",
+                Toast.LENGTH_SHORT
+            ).show()
+            
+            // Try next URL immediately
+            handler.postDelayed({
+                if (isPlaying) {
+                    initializePlayer()
+                    player?.prepare()
+                    player?.playWhenReady = true
+                    player?.play()
+                }
+            }, 1000) // Wait 1 second before trying next URL
+        } else {
+            // All URLs tried, reset and retry from beginning
+            android.util.Log.d("RadioApp", "All URLs tried, resetting to first URL")
+            currentUrlIndex = 0
+            retryAttempts++
+            
+            if (retryAttempts >= maxRetryAttempts) {
+                // Max retries reached
+                isPlaying = false
+                playButton.isEnabled = true
+                stopButton.isEnabled = false
+                Toast.makeText(
+                    this,
+                    "All streams failed after $maxRetryAttempts attempts",
+                    Toast.LENGTH_LONG
+                ).show()
+                return
+            }
+            
+            Toast.makeText(
+                this,
+                "All URLs tried, retrying from beginning... (Attempt $retryAttempts/$maxRetryAttempts)",
+                Toast.LENGTH_SHORT
+            ).show()
+            
+            // Retry from first URL
+            handler.postDelayed({
+                if (isPlaying) {
+                    initializePlayer()
+                    player?.prepare()
+                    player?.playWhenReady = true
+                    player?.play()
+                }
+            }, 2000)
+        }
     }
 
     /**
@@ -364,10 +404,10 @@ class MainActivity : AppCompatActivity() {
         // Cancel previous retry if any
         retryRunnable?.let { handler.removeCallbacks(it) }
 
-        // Schedule retry
+        // Schedule retry (will try next URL automatically via error handler)
         retryRunnable = Runnable {
             if (isPlaying) {
-                // Reinitialize player and restart playback
+                // Reinitialize player and restart playback with current URL
                 initializePlayer()
                 player?.prepare()
                 player?.playWhenReady = true
