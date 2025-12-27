@@ -72,12 +72,19 @@ class MainActivity : AppCompatActivity() {
 
     // Multiple stream URLs - app will try each one automatically if one fails
     // Add more URLs here if you find them. The app will cycle through all URLs until one works.
+    // Common All India Radio stream patterns:
     private val streamUrls = listOf(
         "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8",
         "http://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8",
         "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/Chunklist.m3u8",
-        "http://air.pc.cdn.bitgravity.com/air/live/pbaudio001/Chunklist.m3u8"
-        // Add more URLs here as you find them
+        "http://air.pc.cdn.bitgravity.com/air/live/pbaudio001/Chunklist.m3u8",
+        "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/index.m3u8",
+        "http://air.pc.cdn.bitgravity.com/air/live/pbaudio001/index.m3u8"
+        // To add more URLs, just add them to this list
+        // You can find working URLs by:
+        // 1. Visiting allindiaradio.gov.in
+        // 2. Using browser developer tools (F12) -> Network tab
+        // 3. Playing the stream and looking for .m3u8 requests
     )
     
     // Current URL index being tried
@@ -92,6 +99,8 @@ class MainActivity : AppCompatActivity() {
 
     // Player state tracking
     private var isPlaying = false
+    private var wasBuffering = false // Track if we were buffering
+    private var bufferingStartTime = 0L // Track when buffering started
 
     // Audio focus and wake lock for background playback
     private var audioManager: AudioManager? = null
@@ -170,15 +179,92 @@ class MainActivity : AppCompatActivity() {
                 when (playbackState) {
                     Player.STATE_IDLE -> {
                         android.util.Log.d("RadioApp", "State: IDLE")
+                        // If we were buffering and now idle, the stream failed
+                        if (wasBuffering && isPlaying) {
+                            wasBuffering = false
+                            android.util.Log.e("RadioApp", "Stream failed: went from BUFFERING to IDLE")
+                            // Create a fake error to trigger URL switching
+                            handler.postDelayed({
+                                if (isPlaying && player?.playbackState == Player.STATE_IDLE) {
+                                    // Try next URL
+                                    if (currentUrlIndex < streamUrls.size - 1) {
+                                        currentUrlIndex++
+                                        android.util.Log.d("RadioApp", "Switching to URL ${currentUrlIndex + 1}/${streamUrls.size}")
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "Stream failed, trying URL ${currentUrlIndex + 1}/${streamUrls.size}...",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                        initializePlayer()
+                                        player?.prepare()
+                                        player?.playWhenReady = true
+                                        player?.play()
+                                    } else {
+                                        // All URLs tried, reset
+                                        currentUrlIndex = 0
+                                        retryAttempts++
+                                        if (retryAttempts >= maxRetryAttempts) {
+                                            isPlaying = false
+                                            playButton.isEnabled = true
+                                            stopButton.isEnabled = false
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "All streams failed. Please check your internet connection.",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        } else {
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                "Retrying all URLs... (${retryAttempts}/$maxRetryAttempts)",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                            handler.postDelayed({
+                                                if (isPlaying) {
+                                                    initializePlayer()
+                                                    player?.prepare()
+                                                    player?.playWhenReady = true
+                                                    player?.play()
+                                                }
+                                            }, 2000)
+                                        }
+                                    }
+                                }
+                            }, 500)
+                        }
                     }
                     Player.STATE_BUFFERING -> {
                         android.util.Log.d("RadioApp", "State: BUFFERING")
+                        wasBuffering = true
+                        bufferingStartTime = System.currentTimeMillis()
                         Toast.makeText(this@MainActivity, "Buffering...", Toast.LENGTH_SHORT).show()
+                        
+                        // Set timeout for buffering (10 seconds)
+                        handler.postDelayed({
+                            if (wasBuffering && isPlaying && player?.playbackState == Player.STATE_BUFFERING) {
+                                android.util.Log.e("RadioApp", "Buffering timeout - stream not responding")
+                                wasBuffering = false
+                                // Force try next URL
+                                if (currentUrlIndex < streamUrls.size - 1) {
+                                    currentUrlIndex++
+                                    Toast.makeText(
+                                        this@MainActivity,
+                                        "Buffering timeout, trying URL ${currentUrlIndex + 1}/${streamUrls.size}...",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                    initializePlayer()
+                                    player?.prepare()
+                                    player?.playWhenReady = true
+                                    player?.play()
+                                }
+                            }
+                        }, 10000) // 10 second timeout
                     }
                     Player.STATE_READY -> {
                         android.util.Log.d("RadioApp", "State: READY")
+                        wasBuffering = false
                         // Stream is ready
                         retryAttempts = 0
+                        currentUrlIndex = 0 // Reset to first URL on success
                         if (isPlaying) {
                             player?.play()
                             Toast.makeText(this@MainActivity, "Stream ready!", Toast.LENGTH_SHORT).show()
@@ -186,6 +272,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     Player.STATE_ENDED -> {
                         android.util.Log.d("RadioApp", "State: ENDED")
+                        wasBuffering = false
                         // Stream ended, attempt to reconnect
                         if (isPlaying) {
                             attemptReconnect()
@@ -460,23 +547,31 @@ class MainActivity : AppCompatActivity() {
                     }
                 )
                 setAcceptsDelayedFocusGain(true)
+                setWillPauseWhenDucked(false) // Don't pause when ducked
                 setOnAudioFocusChangeListener { focusChange ->
+                    android.util.Log.d("RadioApp", "Audio focus changed: $focusChange")
                     when (focusChange) {
                         AudioManager.AUDIOFOCUS_LOSS -> {
-                            // Lost focus permanently - stop playback
-                            if (isPlaying) {
-                                stopPlayback()
-                            }
+                            // Lost focus permanently - but don't stop, just pause
+                            android.util.Log.d("RadioApp", "Audio focus lost permanently")
+                            player?.pause()
                         }
                         AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
                             // Lost focus temporarily - pause
+                            android.util.Log.d("RadioApp", "Audio focus lost temporarily")
                             player?.pause()
                         }
                         AudioManager.AUDIOFOCUS_GAIN -> {
                             // Gained focus - resume if playing
+                            android.util.Log.d("RadioApp", "Audio focus gained")
                             if (isPlaying) {
                                 player?.play()
                             }
+                        }
+                        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                            // Can duck - lower volume but keep playing
+                            android.util.Log.d("RadioApp", "Audio focus - can duck")
+                            // Keep playing, ExoPlayer handles ducking
                         }
                     }
                 }
