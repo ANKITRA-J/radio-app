@@ -1,6 +1,6 @@
-# Akashvani Patna Live - Android Radio Streaming App
+# Akashvani Live - Android Radio Streaming App
 
-A simple, stable Android app for streaming Akashvani Patna live HLS audio using Media3 ExoPlayer.
+A simple, stable Android app for streaming Akashvani live HLS audio using Media3 ExoPlayer.
 
 ## Features
 
@@ -18,16 +18,6 @@ A simple, stable Android app for streaming Akashvani Patna live HLS audio using 
 - Minimum SDK: 24 (Android 7.0)
 - Target SDK: 34 (Android 14)
 - Internet connection for streaming
-
-## Setup Instructions
-
-1. **Open the project** in Android Studio
-2. **Sync Gradle** - Android Studio will automatically download dependencies
-3. **Update the HLS Stream URL** (if needed):
-   - Open `app/src/main/java/com/akashvani/patna/live/MainActivity.kt`
-   - Find the `hlsStreamUrl` variable (around line 70)
-   - Replace with the actual Akashvani Patna HLS stream URL
-4. **Build and Run** the app on your device or emulator
 
 ## Dependencies
 
