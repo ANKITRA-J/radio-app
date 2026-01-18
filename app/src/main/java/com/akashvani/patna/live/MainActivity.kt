@@ -223,6 +223,12 @@ class MainActivity : AppCompatActivity() {
                                             isPlaying = false
                                             playButton.isEnabled = true
                                             stopButton.isEnabled = false
+                                            
+                                            // Stop antenna animation when stream fails
+                                            antennaAnimation.repeatCount = 0
+                                            antennaAnimation.setMinAndMaxFrame(150, 180)
+                                            antennaAnimation.playAnimation()
+                                            
                                             Toast.makeText(
                                                 this@MainActivity,
                                                 "All streams failed. Please check your internet connection.",
@@ -458,6 +464,12 @@ class MainActivity : AppCompatActivity() {
                 isPlaying = false
                 playButton.isEnabled = true
                 stopButton.isEnabled = false
+                
+                // Stop antenna animation when all retries fail
+                antennaAnimation.repeatCount = 0
+                antennaAnimation.setMinAndMaxFrame(150, 180)
+                antennaAnimation.playAnimation()
+                
                 Toast.makeText(
                     this,
                     "All streams failed after $maxRetryAttempts attempts",
@@ -497,6 +509,12 @@ class MainActivity : AppCompatActivity() {
             isPlaying = false
             playButton.isEnabled = true
             stopButton.isEnabled = false
+            
+            // Stop antenna animation when reconnection fails
+            antennaAnimation.repeatCount = 0
+            antennaAnimation.setMinAndMaxFrame(150, 180)
+            antennaAnimation.playAnimation()
+            
             Toast.makeText(
                 this,
                 "Failed to connect after $maxRetryAttempts attempts",
