@@ -47,6 +47,8 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
+import com.airbnb.lottie.LottieAnimationView
+import com.airbnb.lottie.LottieDrawable
 
 /**
  * MainActivity for Akashvani Patna Live streaming app.
@@ -69,6 +71,7 @@ class MainActivity : AppCompatActivity() {
     // UI elements
     private lateinit var playButton: Button
     private lateinit var stopButton: Button
+    private lateinit var antennaAnimation: LottieAnimationView
 
     // ====================================================================
     // IMPORTANT: FIND THE CORRECT AKASHVANI PATNA STREAM URL
@@ -150,6 +153,7 @@ class MainActivity : AppCompatActivity() {
     private fun initializeUI() {
         playButton = findViewById(R.id.playButton)
         stopButton = findViewById(R.id.stopButton)
+        antennaAnimation = findViewById(R.id.antennaAnimation)
 
         playButton.setOnClickListener {
             startPlayback()
@@ -356,6 +360,11 @@ class MainActivity : AppCompatActivity() {
         player?.playWhenReady = true
         player?.play()
 
+        // Start antenna animation (frames 30-150, infinite loop)
+        antennaAnimation.setMinAndMaxFrame(30, 150)
+        antennaAnimation.repeatCount = LottieDrawable.INFINITE
+        antennaAnimation.playAnimation()
+
         // Update UI
         playButton.isEnabled = false
         stopButton.isEnabled = true
@@ -378,6 +387,11 @@ class MainActivity : AppCompatActivity() {
         player?.playWhenReady = false
         player?.pause()
         player?.stop()
+
+        // Stop antenna animation (frames 150-180, play once)
+        antennaAnimation.repeatCount = 0
+        antennaAnimation.setMinAndMaxFrame(150, 180)
+        antennaAnimation.playAnimation()
 
         // Release audio focus
         releaseAudioFocus()
