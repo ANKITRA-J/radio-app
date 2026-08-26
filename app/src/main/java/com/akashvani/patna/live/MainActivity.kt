@@ -49,6 +49,13 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import com.airbnb.lottie.LottieAnimationView
 import com.airbnb.lottie.LottieDrawable
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.net.URL
+import java.net.HttpURLConnection
+import org.json.JSONArray
 
 /**
  * MainActivity for Akashvani Patna Live streaming app.
@@ -96,11 +103,35 @@ class MainActivity : AppCompatActivity() {
     // Once you find the correct URL, replace the URLs below with it.
     // ====================================================================
     
-    // Akashvani Patna live stream URL
-    // Correct stream identifier: pbaudio087
-    private val streamUrls = listOf(
-        "https://air.pc.cdn.bitgravity.com/air/live/pbaudio087/playlist.m3u8"
+    // ================================================================
+    // DYNAMIC STREAM URL FETCHING
+    // ================================================================
+    // The app will try to fetch the latest stream URL from Akashvani website
+    // If that fails, it will use these hardcoded fallback URLs
+    // ================================================================
+    
+    // Akashvani API endpoint (may return JSON with stream URLs)
+    private val akashvaniApiUrl = "https://akashvani.gov.in/radio/live.php"
+    
+    // Fallback URLs if dynamic fetch fails
+    private val fallbackStreamUrls = listOf(
+        // PRIMARY: CloudFront CDN URL (last known working URL)
+        "https://d1tmej9eu7kw5c.cloudfront.net/c398958b3874b441/c398958b3874b441.m3u8",
+        
+        // FALLBACK: Traditional BitGravity CDN URLs for Patna (pbaudio087)
+        "https://air.pc.cdn.bitgravity.com/air/live/pbaudio087/playlist.m3u8",
+        "https://air.pc.cdn.bitgravity.com/air/live/pbaudio087/chunklist.m3u8",
+        "http://air.pc.cdn.bitgravity.com/air/live/pbaudio087/playlist.m3u8",
+        
+        // FALLBACK: Akamai CDN endpoint
+        "https://air-lh.akamaihd.net/i/Patna_@644773/master.m3u8"
     )
+    
+    // Current list of stream URLs to try (will be populated dynamically)
+    private var streamUrls = mutableListOf<String>()
+    
+    // Station identifier for Patna
+    private val patnaStationId = "pbaudio087"
     
     // Current URL index being tried
     private var currentUrlIndex = 0
@@ -334,6 +365,129 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Fetch the latest stream URL from Akashvani website dynamically
+     * This ensures the app always uses the current working URL
+     */
+    private suspend fun fetchStreamUrlFromWebsite(): String? = withContext(Dispatchers.IO) {
+        try {
+            android.util.Log.d("RadioApp", "Fetching stream URL from website...")
+            
+            // Try multiple methods to get the stream URL
+            
+            // Method 1: Try to fetch from the main page HTML
+            val connection = URL(akashvaniApiUrl).openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36")
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+            
+            val responseCode = connection.responseCode
+            if (responseCode == 200) {
+                val html = connection.inputStream.bufferedReader().use { it.readText() }
+                
+                // Look for m3u8 URLs in the HTML
+                // Pattern 1: CloudFront URLs
+                val cloudFrontRegex = """https://d[a-z0-9]+\.cloudfront\.net/[a-f0-9]+/[a-f0-9]+\.m3u8""".toRegex()
+                val cloudFrontMatch = cloudFrontRegex.find(html)
+                if (cloudFrontMatch != null) {
+                    val url = cloudFrontMatch.value
+                    android.util.Log.d("RadioApp", "Found CloudFront URL: $url")
+                    
+                    // Verify it's for Patna by checking if it plays
+                    if (verifyStreamUrl(url)) {
+                        return@withContext url
+                    }
+                }
+                
+                // Pattern 2: Look for pbaudio087 (Patna's identifier)
+                val patnaRegex = """https?://[^"'\s]+$patnaStationId[^"'\s]+\.m3u8""".toRegex()
+                val patnaMatch = patnaRegex.find(html)
+                if (patnaMatch != null) {
+                    val url = patnaMatch.value
+                    android.util.Log.d("RadioApp", "Found Patna-specific URL: $url")
+                    return@withContext url
+                }
+                
+                // Pattern 3: Any m3u8 URL near "Patna" text
+                val lines = html.lines()
+                for (i in lines.indices) {
+                    if (lines[i].contains("Patna", ignoreCase = true) || 
+                        lines[i].contains(patnaStationId, ignoreCase = true)) {
+                        // Look in surrounding lines for m3u8 URLs
+                        val searchRange = maxOf(0, i - 5) until minOf(lines.size, i + 5)
+                        for (j in searchRange) {
+                            val m3u8Regex = """https?://[^"'\s]+\.m3u8""".toRegex()
+                            val match = m3u8Regex.find(lines[j])
+                            if (match != null) {
+                                val url = match.value
+                                android.util.Log.d("RadioApp", "Found nearby m3u8 URL: $url")
+                                return@withContext url
+                            }
+                        }
+                    }
+                }
+            }
+            
+            android.util.Log.w("RadioApp", "Could not find stream URL in website")
+            null
+        } catch (e: Exception) {
+            android.util.Log.e("RadioApp", "Error fetching stream URL: ${e.message}")
+            e.printStackTrace()
+            null
+        }
+    }
+    
+    /**
+     * Verify if a stream URL is accessible
+     */
+    private suspend fun verifyStreamUrl(url: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val connection = URL(url).openConnection() as HttpURLConnection
+            connection.requestMethod = "HEAD"
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36")
+            
+            val responseCode = connection.responseCode
+            connection.disconnect()
+            
+            val isValid = responseCode in 200..399
+            android.util.Log.d("RadioApp", "Stream URL verification: $url -> $responseCode (${if (isValid) "VALID" else "INVALID"})")
+            return@withContext isValid
+        } catch (e: Exception) {
+            android.util.Log.e("RadioApp", "Error verifying stream URL: ${e.message}")
+            return@withContext false
+        }
+    }
+    
+    /**
+     * Load stream URLs (fetch from website first, then use fallbacks)
+     */
+    private suspend fun loadStreamUrls() {
+        streamUrls.clear()
+        
+        // Try to fetch the latest URL from website
+        val dynamicUrl = fetchStreamUrlFromWebsite()
+        if (dynamicUrl != null) {
+            android.util.Log.d("RadioApp", "Using dynamically fetched URL: $dynamicUrl")
+            streamUrls.add(dynamicUrl)
+            
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    this@MainActivity,
+                    "Using latest stream URL from website",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        
+        // Add fallback URLs
+        streamUrls.addAll(fallbackStreamUrls)
+        
+        android.util.Log.d("RadioApp", "Total ${streamUrls.size} stream URLs available")
+    }
+
+    /**
      * Start playback of the HLS stream
      */
     private fun startPlayback() {
@@ -354,29 +508,39 @@ class MainActivity : AppCompatActivity() {
         retryAttempts = 0
         currentUrlIndex = 0 // Reset to first URL when starting playback
 
-        // If player is not initialized or in error state, reinitialize
-        if (player == null || player?.playbackState == Player.STATE_IDLE) {
-            android.util.Log.d("RadioApp", "Initializing player with ${streamUrls.size} URLs available")
-            initializePlayer()
-            // Prepare player before starting playback
-            player?.prepare()
+        // Load stream URLs in background
+        CoroutineScope(Dispatchers.Main).launch {
+            Toast.makeText(this@MainActivity, "Fetching latest stream URL...", Toast.LENGTH_SHORT).show()
+            
+            // Load URLs (fetch from website + fallbacks)
+            withContext(Dispatchers.IO) {
+                loadStreamUrls()
+            }
+            
+            // If player is not initialized or in error state, reinitialize
+            if (player == null || player?.playbackState == Player.STATE_IDLE) {
+                android.util.Log.d("RadioApp", "Initializing player with ${streamUrls.size} URLs available")
+                initializePlayer()
+                // Prepare player before starting playback
+                player?.prepare()
+            }
+
+            // Start playback
+            player?.playWhenReady = true
+            player?.play()
+
+            // Start antenna animation (frames 30-150, infinite loop)
+            antennaAnimation.setMinAndMaxFrame(30, 150)
+            antennaAnimation.repeatCount = LottieDrawable.INFINITE
+            antennaAnimation.playAnimation()
+
+            // Update UI
+            playButton.isEnabled = false
+            stopButton.isEnabled = true
+
+            Toast.makeText(this@MainActivity, "Connecting to stream...", Toast.LENGTH_SHORT).show()
+            android.util.Log.d("RadioApp", "Playback started, waiting for stream...")
         }
-
-        // Start playback
-        player?.playWhenReady = true
-        player?.play()
-
-        // Start antenna animation (frames 30-150, infinite loop)
-        antennaAnimation.setMinAndMaxFrame(30, 150)
-        antennaAnimation.repeatCount = LottieDrawable.INFINITE
-        antennaAnimation.playAnimation()
-
-        // Update UI
-        playButton.isEnabled = false
-        stopButton.isEnabled = true
-
-        Toast.makeText(this, "Connecting to stream...", Toast.LENGTH_SHORT).show()
-        android.util.Log.d("RadioApp", "Playback started, waiting for stream...")
     }
 
     /**

@@ -49,5 +49,9 @@ dependencies {
     
     // Lottie Animation
     implementation 'com.airbnb.android:lottie:6.1.0'
+    
+    // Kotlin Coroutines for async operations
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3'
 }
 
