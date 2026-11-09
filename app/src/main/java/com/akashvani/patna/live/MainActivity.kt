@@ -110,28 +110,23 @@ class MainActivity : AppCompatActivity() {
     // If that fails, it will use these hardcoded fallback URLs
     // ================================================================
     
-    // Akashvani API endpoint (may return JSON with stream URLs)
+    // Akashvani API endpoint (returns HTML containing station JavaScript definitions)
     private val akashvaniApiUrl = "https://akashvani.gov.in/radio/live.php"
     
     // Fallback URLs if dynamic fetch fails
     private val fallbackStreamUrls = listOf(
-        // PRIMARY: CloudFront CDN URL (last known working URL)
-        "https://d1tmej9eu7kw5c.cloudfront.net/c398958b3874b441/c398958b3874b441.m3u8",
-        
-        // FALLBACK: Traditional BitGravity CDN URLs for Patna (pbaudio087)
-        "https://air.pc.cdn.bitgravity.com/air/live/pbaudio087/playlist.m3u8",
-        "https://air.pc.cdn.bitgravity.com/air/live/pbaudio087/chunklist.m3u8",
-        "http://air.pc.cdn.bitgravity.com/air/live/pbaudio087/playlist.m3u8",
-        
-        // FALLBACK: Akamai CDN endpoint
-        "https://air-lh.akamaihd.net/i/Patna_@644773/master.m3u8"
+        // PRIMARY: Waves PB official streaming endpoint (Prasar Bharati)
+        "https://radio.wavespb.com/live/c398958b3874b441/c398958b3874b441.m3u8",
+
+        // DIRECT CDN: CloudFront endpoint (which wavespb redirects to)
+        "https://d1tmej9eu7kw5c.cloudfront.net/c398958b3874b441/c398958b3874b441.m3u8"
     )
     
     // Current list of stream URLs to try (will be populated dynamically)
     private var streamUrls = mutableListOf<String>()
     
-    // Station identifier for Patna
-    private val patnaStationId = "pbaudio087"
+    // Station identifier for Patna on Waves PB / Akashvani portal
+    private val patnaStationId = "c398958b3874b441"
     
     // Current URL index being tried
     private var currentUrlIndex = 0
@@ -142,15 +137,14 @@ class MainActivity : AppCompatActivity() {
     private var retryAttempts = 0
     private val handler = Handler(Looper.getMainLooper())
     private var retryRunnable: Runnable? = null
+    private var bufferingTimeoutRunnable: Runnable? = null
 
     // Player state tracking
     private var isPlaying = false
     private var wasBuffering = false // Track if we were buffering
     private var bufferingStartTime = 0L // Track when buffering started
 
-    // Audio focus and wake lock for background playback
-    private var audioManager: AudioManager? = null
-    private var audioFocusRequest: AudioFocusRequest? = null
+    // Wake lock for background playback
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -159,9 +153,6 @@ class MainActivity : AppCompatActivity() {
 
         // Initialize UI
         initializeUI()
-
-        // Initialize audio manager for audio focus
-        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
         // Initialize wake lock for background playback
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -209,15 +200,31 @@ class MainActivity : AppCompatActivity() {
             .build()
 
         player = ExoPlayer.Builder(this)
-            .setAudioAttributes(audioAttributes, true) // Handle audio focus
+            .setAudioAttributes(audioAttributes, true) // Media3 handles audio focus automatically
             .build()
+            .apply {
+                // Disable video tracks: HLS stream contains dummy video track, we only want audio
+                trackSelectionParameters = trackSelectionParameters
+                    .buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true)
+                    .build()
+            }
 
         // Set up player event listener for error handling and retry
         player?.addListener(object : Player.Listener {
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 super.onPlayerError(error)
                 android.util.Log.e("RadioApp", "Player error: ${error.errorCode} - ${error.message}")
-                handlePlaybackError(error)
+                cancelBufferingTimeout()
+                val errorMsg = when (error.errorCode) {
+                    androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "Network connection failed"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Connection timeout"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "HTTP error: ${error.message}"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED -> "Invalid stream format"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED -> "Invalid HLS manifest"
+                    else -> "Error ${error.errorCode}: ${error.message ?: "Unknown error"}"
+                }
+                handlePlaybackFailure(errorMsg)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -226,107 +233,24 @@ class MainActivity : AppCompatActivity() {
                 when (playbackState) {
                     Player.STATE_IDLE -> {
                         android.util.Log.d("RadioApp", "State: IDLE")
-                        // If we were buffering and now idle, the stream failed
-                        if (wasBuffering && isPlaying) {
-                            wasBuffering = false
-                            android.util.Log.e("RadioApp", "Stream failed: went from BUFFERING to IDLE")
-                            // Create a fake error to trigger URL switching
-                            handler.postDelayed({
-                                if (isPlaying && player?.playbackState == Player.STATE_IDLE) {
-                                    // Try next URL
-                                    if (currentUrlIndex < streamUrls.size - 1) {
-                                        currentUrlIndex++
-                                        android.util.Log.d("RadioApp", "Switching to URL ${currentUrlIndex + 1}/${streamUrls.size}")
-                                        Toast.makeText(
-                                            this@MainActivity,
-                                            "Stream failed, trying URL ${currentUrlIndex + 1}/${streamUrls.size}...",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                        initializePlayer()
-                                        player?.prepare()
-                                        player?.playWhenReady = true
-                                        player?.play()
-                                    } else {
-                                        // All URLs tried, reset
-                                        currentUrlIndex = 0
-                                        retryAttempts++
-                                        if (retryAttempts >= maxRetryAttempts) {
-                                            isPlaying = false
-                                            playButton.isEnabled = true
-                                            stopButton.isEnabled = false
-                                            
-                                            // Stop antenna animation when stream fails
-                                            antennaAnimation.repeatCount = 0
-                                            antennaAnimation.setMinAndMaxFrame(150, 180)
-                                            antennaAnimation.playAnimation()
-                                            
-                                            Toast.makeText(
-                                                this@MainActivity,
-                                                "All streams failed. Please check your internet connection.",
-                                                Toast.LENGTH_LONG
-                                            ).show()
-                                        } else {
-                                            Toast.makeText(
-                                                this@MainActivity,
-                                                "Retrying all URLs... (${retryAttempts}/$maxRetryAttempts)",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
-                                            handler.postDelayed({
-                                                if (isPlaying) {
-                                                    initializePlayer()
-                                                    player?.prepare()
-                                                    player?.playWhenReady = true
-                                                    player?.play()
-                                                }
-                                            }, 2000)
-                                        }
-                                    }
-                                }
-                            }, 500)
-                        }
                     }
                     Player.STATE_BUFFERING -> {
                         android.util.Log.d("RadioApp", "State: BUFFERING")
-                        wasBuffering = true
-                        bufferingStartTime = System.currentTimeMillis()
                         Toast.makeText(this@MainActivity, "Buffering...", Toast.LENGTH_SHORT).show()
-                        
-                        // Set timeout for buffering (10 seconds)
-                        handler.postDelayed({
-                            if (wasBuffering && isPlaying && player?.playbackState == Player.STATE_BUFFERING) {
-                                android.util.Log.e("RadioApp", "Buffering timeout - stream not responding")
-                                wasBuffering = false
-                                // Force try next URL
-                                if (currentUrlIndex < streamUrls.size - 1) {
-                                    currentUrlIndex++
-                                    Toast.makeText(
-                                        this@MainActivity,
-                                        "Buffering timeout, trying URL ${currentUrlIndex + 1}/${streamUrls.size}...",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                    initializePlayer()
-                                    player?.prepare()
-                                    player?.playWhenReady = true
-                                    player?.play()
-                                }
-                            }
-                        }, 10000) // 10 second timeout
+                        scheduleBufferingTimeout()
                     }
                     Player.STATE_READY -> {
                         android.util.Log.d("RadioApp", "State: READY")
-                        wasBuffering = false
-                        // Stream is ready
+                        cancelBufferingTimeout()
                         retryAttempts = 0
-                        currentUrlIndex = 0 // Reset to first URL on success
                         if (isPlaying) {
                             player?.play()
-                            Toast.makeText(this@MainActivity, "Stream ready!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivity, "Stream playing!", Toast.LENGTH_SHORT).show()
                         }
                     }
                     Player.STATE_ENDED -> {
                         android.util.Log.d("RadioApp", "State: ENDED")
-                        wasBuffering = false
-                        // Stream ended, attempt to reconnect
+                        cancelBufferingTimeout()
                         if (isPlaying) {
                             attemptReconnect()
                         }
@@ -370,69 +294,73 @@ class MainActivity : AppCompatActivity() {
      */
     private suspend fun fetchStreamUrlFromWebsite(): String? = withContext(Dispatchers.IO) {
         try {
-            android.util.Log.d("RadioApp", "Fetching stream URL from website...")
-            
-            // Try multiple methods to get the stream URL
-            
-            // Method 1: Try to fetch from the main page HTML
+            android.util.Log.d("RadioApp", "Fetching stream URL from website: $akashvaniApiUrl")
             val connection = URL(akashvaniApiUrl).openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36")
-            connection.connectTimeout = 10000
-            connection.readTimeout = 10000
+            connection.connectTimeout = 8000
+            connection.readTimeout = 8000
             
             val responseCode = connection.responseCode
             if (responseCode == 200) {
                 val html = connection.inputStream.bufferedReader().use { it.readText() }
                 
-                // Look for m3u8 URLs in the HTML
-                // Pattern 1: CloudFront URLs
-                val cloudFrontRegex = """https://d[a-z0-9]+\.cloudfront\.net/[a-f0-9]+/[a-f0-9]+\.m3u8""".toRegex()
-                val cloudFrontMatch = cloudFrontRegex.find(html)
-                if (cloudFrontMatch != null) {
-                    val url = cloudFrontMatch.value
-                    android.util.Log.d("RadioApp", "Found CloudFront URL: $url")
-                    
-                    // Verify it's for Patna by checking if it plays
-                    if (verifyStreamUrl(url)) {
-                        return@withContext url
+                // Method 1: Look for 'Akashvani Patna' in JavaScript channel definition
+                // In live.php:
+                // '70': {
+                //     name: 'Akashvani Patna',
+                //     ...
+                //     live_url: 'https://radio.wavespb.com/live/c398958b3874b441/c398958b3874b441.m3u8',
+                val nameRegex = """name:\s*['"]Akashvani Patna['"]""".toRegex(RegexOption.IGNORE_CASE)
+                val liveUrlRegex = """live_url:\s*['"](https?://[^'"]+\.m3u8)['"]""".toRegex()
+                val lines = html.lines()
+                var matchedStation = false
+
+                for (line in lines) {
+                    val trimmed = line.trim()
+                    if (nameRegex.find(trimmed) != null) {
+                        matchedStation = true
+                        continue
+                    }
+                    if (matchedStation) {
+                        // Skip commented out lines like //live_url:
+                        if (trimmed.startsWith("//") || trimmed.startsWith("/*")) {
+                            continue
+                        }
+                        val match = liveUrlRegex.find(trimmed)
+                        if (match != null) {
+                            val candidateUrl = match.groupValues[1]
+                            android.util.Log.d("RadioApp", "Found live_url from JS channel: $candidateUrl")
+                            if (verifyStreamUrl(candidateUrl)) {
+                                return@withContext candidateUrl
+                            }
+                        }
+                        if (trimmed.endsWith("},") || trimmed == "}") {
+                            matchedStation = false
+                        }
                     }
                 }
                 
-                // Pattern 2: Look for pbaudio087 (Patna's identifier)
-                val patnaRegex = """https?://[^"'\s]+$patnaStationId[^"'\s]+\.m3u8""".toRegex()
-                val patnaMatch = patnaRegex.find(html)
-                if (patnaMatch != null) {
-                    val url = patnaMatch.value
-                    android.util.Log.d("RadioApp", "Found Patna-specific URL: $url")
-                    return@withContext url
-                }
-                
-                // Pattern 3: Any m3u8 URL near "Patna" text
-                val lines = html.lines()
-                for (i in lines.indices) {
-                    if (lines[i].contains("Patna", ignoreCase = true) || 
-                        lines[i].contains(patnaStationId, ignoreCase = true)) {
-                        // Look in surrounding lines for m3u8 URLs
-                        val searchRange = maxOf(0, i - 5) until minOf(lines.size, i + 5)
-                        for (j in searchRange) {
-                            val m3u8Regex = """https?://[^"'\s]+\.m3u8""".toRegex()
-                            val match = m3u8Regex.find(lines[j])
-                            if (match != null) {
-                                val url = match.value
-                                android.util.Log.d("RadioApp", "Found nearby m3u8 URL: $url")
-                                return@withContext url
-                            }
+                // Method 2: Match any uncommented live_url containing Patna station hash
+                val hashRegex = """https?://[^\s'"]+$patnaStationId[^\s'"]+\.m3u8""".toRegex()
+                for (line in lines) {
+                    val trimmed = line.trim()
+                    if (trimmed.startsWith("//") || trimmed.startsWith("/*")) continue
+                    val match = hashRegex.find(trimmed)
+                    if (match != null) {
+                        val candidateUrl = match.value
+                        android.util.Log.d("RadioApp", "Found URL matching station hash: $candidateUrl")
+                        if (verifyStreamUrl(candidateUrl)) {
+                            return@withContext candidateUrl
                         }
                     }
                 }
             }
             
-            android.util.Log.w("RadioApp", "Could not find stream URL in website")
+            android.util.Log.w("RadioApp", "Could not find active stream URL in website, using fallbacks")
             null
         } catch (e: Exception) {
             android.util.Log.e("RadioApp", "Error fetching stream URL: ${e.message}")
-            e.printStackTrace()
             null
         }
     }
@@ -443,7 +371,8 @@ class MainActivity : AppCompatActivity() {
     private suspend fun verifyStreamUrl(url: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val connection = URL(url).openConnection() as HttpURLConnection
-            connection.requestMethod = "HEAD"
+            connection.instanceFollowRedirects = true
+            connection.requestMethod = "GET"
             connection.connectTimeout = 5000
             connection.readTimeout = 5000
             connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36")
@@ -481,10 +410,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
-        // Add fallback URLs
-        streamUrls.addAll(fallbackStreamUrls)
+        // Add fallback URLs without duplicating
+        for (fallback in fallbackStreamUrls) {
+            if (!streamUrls.contains(fallback)) {
+                streamUrls.add(fallback)
+            }
+        }
         
-        android.util.Log.d("RadioApp", "Total ${streamUrls.size} stream URLs available")
+        android.util.Log.d("RadioApp", "Total ${streamUrls.size} stream URLs available: $streamUrls")
     }
 
     /**
@@ -493,12 +426,6 @@ class MainActivity : AppCompatActivity() {
     private fun startPlayback() {
         if (isPlaying) {
             return // Already playing
-        }
-
-        // Request audio focus for background playback
-        if (!requestAudioFocus()) {
-            Toast.makeText(this, "Cannot play: Another app is using audio", Toast.LENGTH_SHORT).show()
-            return
         }
 
         // Acquire wake lock to keep device awake during playback
@@ -549,7 +476,8 @@ class MainActivity : AppCompatActivity() {
     private fun stopPlayback() {
         isPlaying = false
 
-        // Cancel any pending retry attempts
+        // Cancel any pending retry or buffering timeouts
+        cancelBufferingTimeout()
         retryRunnable?.let { handler.removeCallbacks(it) }
         retryRunnable = null
 
@@ -563,9 +491,6 @@ class MainActivity : AppCompatActivity() {
         antennaAnimation.setMinAndMaxFrame(150, 180)
         antennaAnimation.playAnimation()
 
-        // Release audio focus
-        releaseAudioFocus()
-
         // Release wake lock
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
@@ -578,15 +503,26 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "Playback stopped", Toast.LENGTH_SHORT).show()
     }
 
+    private fun scheduleBufferingTimeout() {
+        cancelBufferingTimeout()
+        bufferingTimeoutRunnable = Runnable {
+            if (isPlaying && player?.playbackState == Player.STATE_BUFFERING) {
+                android.util.Log.e("RadioApp", "Buffering timeout - stream stalled")
+                handlePlaybackFailure("Buffering timeout")
+            }
+        }
+        handler.postDelayed(bufferingTimeoutRunnable!!, 10000) // 10s timeout
+    }
+
+    private fun cancelBufferingTimeout() {
+        bufferingTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        bufferingTimeoutRunnable = null
+    }
+
     /**
-     * Handle playback errors and attempt reconnection
-     * Will automatically try next URL if current one fails
+     * Handle playback errors and attempt failover to next stream
      */
     private fun handlePlaybackError(error: androidx.media3.common.PlaybackException) {
-        if (!isPlaying) {
-            return // Don't retry if user stopped playback
-        }
-
         val errorMessage = when (error.errorCode) {
             androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "Network connection failed"
             androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Connection timeout"
@@ -595,20 +531,32 @@ class MainActivity : AppCompatActivity() {
             androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED -> "Invalid HLS manifest"
             else -> "Error ${error.errorCode}: ${error.message ?: "Unknown error"}"
         }
+        handlePlaybackFailure(errorMessage)
+    }
 
-        android.util.Log.e("RadioApp", "Error with URL ${currentUrlIndex + 1}: $errorMessage")
-        
+    /**
+     * Centralized failover and reconnect logic
+     */
+    private fun handlePlaybackFailure(reason: String) {
+        if (!isPlaying) {
+            return
+        }
+
+        cancelBufferingTimeout()
+        retryRunnable?.let { handler.removeCallbacks(it) }
+
+        android.util.Log.e("RadioApp", "Playback failure ($reason) with URL ${currentUrlIndex + 1}/${streamUrls.size}")
+
         // Try next URL if available
         if (currentUrlIndex < streamUrls.size - 1) {
             currentUrlIndex++
             android.util.Log.d("RadioApp", "Switching to URL ${currentUrlIndex + 1}/${streamUrls.size}")
             Toast.makeText(
                 this,
-                "Stream failed, trying alternative URL ${currentUrlIndex + 1}/${streamUrls.size}...",
+                "Stream interrupted, trying alternative stream (${currentUrlIndex + 1}/${streamUrls.size})...",
                 Toast.LENGTH_SHORT
             ).show()
-            
-            // Try next URL immediately
+
             handler.postDelayed({
                 if (isPlaying) {
                     initializePlayer()
@@ -616,24 +564,21 @@ class MainActivity : AppCompatActivity() {
                     player?.playWhenReady = true
                     player?.play()
                 }
-            }, 1000) // Wait 1 second before trying next URL
+            }, 1000)
         } else {
-            // All URLs tried, reset and retry from beginning
-            android.util.Log.d("RadioApp", "All URLs tried, resetting to first URL")
+            // All URLs tried, cycle back and retry with exponential backoff
             currentUrlIndex = 0
             retryAttempts++
-            
+
             if (retryAttempts >= maxRetryAttempts) {
-                // Max retries reached
                 isPlaying = false
                 playButton.isEnabled = true
                 stopButton.isEnabled = false
-                
-                // Stop antenna animation when all retries fail
+
                 antennaAnimation.repeatCount = 0
                 antennaAnimation.setMinAndMaxFrame(150, 180)
                 antennaAnimation.playAnimation()
-                
+
                 Toast.makeText(
                     this,
                     "All streams failed after $maxRetryAttempts attempts",
@@ -641,14 +586,13 @@ class MainActivity : AppCompatActivity() {
                 ).show()
                 return
             }
-            
+
             Toast.makeText(
                 this,
-                "All URLs tried, retrying from beginning... (Attempt $retryAttempts/$maxRetryAttempts)",
+                "Retrying stream... (Attempt $retryAttempts/$maxRetryAttempts)",
                 Toast.LENGTH_SHORT
             ).show()
-            
-            // Retry from first URL
+
             handler.postDelayed({
                 if (isPlaying) {
                     initializePlayer()
@@ -717,7 +661,8 @@ class MainActivity : AppCompatActivity() {
      * Release ExoPlayer resources
      */
     private fun releasePlayer() {
-        // Cancel any pending retries
+        // Cancel any pending retries or timeouts
+        cancelBufferingTimeout()
         retryRunnable?.let { handler.removeCallbacks(it) }
         retryRunnable = null
 
@@ -737,79 +682,6 @@ class MainActivity : AppCompatActivity() {
         // Ensure playback continues if it was playing
         if (isPlaying) {
             player?.playWhenReady = true
-        }
-    }
-
-    /**
-     * Request audio focus for background playback
-     */
-    private fun requestAudioFocus(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // Android 8.0+ requires AudioFocusRequest
-            val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN).run {
-                setAudioAttributes(
-                    AndroidAudioAttributes.Builder().run {
-                        setUsage(AndroidAudioAttributes.USAGE_MEDIA)
-                        setContentType(AndroidAudioAttributes.CONTENT_TYPE_MUSIC)
-                        build()
-                    }
-                )
-                setAcceptsDelayedFocusGain(true)
-                setWillPauseWhenDucked(false) // Don't pause when ducked
-                setOnAudioFocusChangeListener { focusChange ->
-                    android.util.Log.d("RadioApp", "Audio focus changed: $focusChange")
-                    when (focusChange) {
-                        AudioManager.AUDIOFOCUS_LOSS -> {
-                            // Lost focus permanently - but don't stop, just pause
-                            android.util.Log.d("RadioApp", "Audio focus lost permanently")
-                            player?.pause()
-                        }
-                        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                            // Lost focus temporarily - pause
-                            android.util.Log.d("RadioApp", "Audio focus lost temporarily")
-                            player?.pause()
-                        }
-                        AudioManager.AUDIOFOCUS_GAIN -> {
-                            // Gained focus - resume if playing
-                            android.util.Log.d("RadioApp", "Audio focus gained")
-                            if (isPlaying) {
-                                player?.play()
-                            }
-                        }
-                        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                            // Can duck - lower volume but keep playing
-                            android.util.Log.d("RadioApp", "Audio focus - can duck")
-                            // Keep playing, ExoPlayer handles ducking
-                        }
-                    }
-                }
-                build()
-            }
-            audioFocusRequest = focusRequest
-            val result = audioManager?.requestAudioFocus(focusRequest)
-            result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        } else {
-            // Android 7.1 and below
-            val result = audioManager?.requestAudioFocus(
-                null,
-                AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN
-            )
-            result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        }
-    }
-
-    /**
-     * Release audio focus
-     */
-    private fun releaseAudioFocus() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            audioFocusRequest?.let {
-                audioManager?.abandonAudioFocusRequest(it)
-                audioFocusRequest = null
-            }
-        } else {
-            audioManager?.abandonAudioFocus(null)
         }
     }
 
